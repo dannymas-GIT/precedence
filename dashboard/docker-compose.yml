@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ${PROJECT_ROOT:-..}:/workspace
+    environment:
+      - VITE_API_URL=http://dashboard-api:3001
+      - PROJECT_ROOT=/workspace
+
+  dashboard-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    volumes:
+      - ${PROJECT_ROOT:-..}:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PROJECT_ROOT=/workspace
+    depends_on:
+      - dashboard 
