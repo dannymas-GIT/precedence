@@ -362,10 +362,30 @@ def analyze_changes(repo: Repo, files: List[str]) -> List[str]:
                 if changes_found:
                     changes.append(f"- Update {file}: {', '.join(changes_found)}")
                 else:
-                    changes.append(f"- Update {file}")
+                    # Try to get the actual changes
+                    diff_lines = [line for line in diff.split('\n') if line.startswith('+') and not line.startswith('+++')]
+                    if diff_lines:
+                        # Get meaningful changes, excluding whitespace-only changes
+                        meaningful_changes = [line[1:].strip() for line in diff_lines if line[1:].strip()]
+                        if meaningful_changes:
+                            summary = meaningful_changes[0][:50]  # Take first meaningful change as summary
+                            changes.append(f"- Update {file}: {summary}")
+                        else:
+                            changes.append(f"- Update {file}")
+                    else:
+                        changes.append(f"- Update {file}")
             else:
-                # For other files, just mention the file was changed
-                changes.append(f"- Update {file}")
+                # For other files, try to get a summary of changes
+                try:
+                    diff = repo.git.diff(file)
+                    diff_lines = [line for line in diff.split('\n') if line.startswith('+') and not line.startswith('+++')]
+                    if diff_lines:
+                        summary = diff_lines[0][1:].strip()[:50]  # Take first line as summary
+                        changes.append(f"- Update {file}: {summary}")
+                    else:
+                        changes.append(f"- Update {file}")
+                except:
+                    changes.append(f"- Update {file}")
                 
         except Exception as e:
             print(f"Error analyzing {file}: {str(e)}")
@@ -387,8 +407,17 @@ async def preview_feature_commit():
         changes = analyze_changes(repo, changed_files)
         
         # Generate commit message
-        primary_change = changes[0].replace('- Update ', '')
-        message = f"feat: {primary_change}"
+        if len(changes) == 1:
+            # Single file change - use its description
+            primary_change = changes[0].replace('- Update ', '')
+            message = f"feat: {primary_change}"
+        else:
+            # Multiple files - create a summary
+            main_files = [os.path.basename(f) for f in changed_files[:3]]
+            if len(changed_files) > 3:
+                message = f"feat: update {', '.join(main_files)} and {len(changed_files) - 3} more files"
+            else:
+                message = f"feat: update {', '.join(main_files)}"
         
         return CommitPreview(
             message=message,
@@ -405,13 +434,32 @@ async def create_feature_commit():
         repo = get_repo()
         preview = await preview_feature_commit()
         
+        # Ensure Git user is configured
+        git_user_name = os.getenv('GIT_USER_NAME')
+        git_user_email = os.getenv('GIT_USER_EMAIL')
+        
+        if not git_user_name or not git_user_email:
+            raise HTTPException(
+                status_code=500,
+                detail="Git user not configured. Please set GIT_USER_NAME and GIT_USER_EMAIL environment variables."
+            )
+        
+        # Configure Git user locally for this repository
+        repo.config_writer().set_value("user", "name", git_user_name).release()
+        repo.config_writer().set_value("user", "email", git_user_email).release()
+        
         # Stage all changes
         repo.git.add('.')
         
-        # Create commit
-        repo.index.commit(preview.message)
+        # Create commit with full message
+        full_message = preview.message + "\n\n" + "\n".join(preview.changes)
+        commit = repo.index.commit(full_message)
         
-        return {"status": "success", "message": preview.message}
+        return {
+            "status": "success",
+            "message": full_message,
+            "commit_hash": commit.hexsha
+        }
     except Exception as e:
         print(f"Error creating feature commit: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
