@@ -31,7 +31,8 @@ RUN apt-get update && \
     nginx \
     supervisor \
     && rm -rf /var/lib/apt/lists/* \
-    && git config --global --add safe.directory /workspace
+    && git config --global --add safe.directory /workspace \
+    && git config --global credential.helper store
 
 # Create required directories
 RUN mkdir -p /var/log/supervisor
@@ -62,4 +63,8 @@ EXPOSE 80 8000 3001
 # Configure Git at runtime using environment variables
 CMD git config --global user.name "${GIT_USER_NAME}" && \
     git config --global user.email "${GIT_USER_EMAIL}" && \
+    if [ ! -z "${GITHUB_TOKEN}" ]; then \
+        echo "https://${GITHUB_TOKEN}:x-oauth-basic@github.com" > /root/.git-credentials && \
+        chmod 600 /root/.git-credentials; \
+    fi && \
     /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf 

@@ -149,6 +149,7 @@ def get_repo():
 
 @app.get("/api/git/branch")
 async def get_current_branch():
+    """Get current branch name."""
     try:
         repo = get_repo()
         if not repo.head.is_valid():
@@ -169,6 +170,7 @@ async def get_current_branch():
 
 @app.get("/api/git/commit")
 async def get_last_commit():
+    """Get last commit information."""
     try:
         repo = get_repo()
         if not repo.head.is_valid():
@@ -179,9 +181,30 @@ async def get_last_commit():
             }
         
         commit = repo.head.commit
+        # Get relative time
+        commit_time = datetime.fromtimestamp(commit.committed_date)
+        now = datetime.now()
+        delta = now - commit_time
+        
+        if delta.days > 0:
+            relative_time = f"{delta.days} days ago"
+        elif delta.seconds >= 3600:
+            hours = delta.seconds // 3600
+            relative_time = f"{hours} hours ago"
+        elif delta.seconds >= 60:
+            minutes = delta.seconds // 60
+            relative_time = f"{minutes} minutes ago"
+        else:
+            relative_time = "just now"
+        
         return {
             "message": commit.message.strip(),
-            "timestamp": datetime.fromtimestamp(commit.committed_date).isoformat()
+            "timestamp": commit_time.isoformat(),
+            "relative_time": relative_time,
+            "author": {
+                "name": commit.author.name,
+                "email": commit.author.email
+            }
         }
     except Exception as e:
         print(f"Git error in get_last_commit: {str(e)}")
@@ -393,75 +416,65 @@ def analyze_changes(repo: Repo, files: List[str]) -> List[str]:
     
     return changes
 
-@app.get("/api/git/commit/preview", response_model=CommitPreview)
-async def preview_feature_commit():
-    """Generate a preview of the feature commit."""
+@app.get("/api/git/commit/preview")
+async def get_commit_preview():
+    """Get a preview of the changes to be committed."""
     try:
         repo = get_repo()
-        changed_files = get_changed_files(repo)
         
-        if not changed_files:
-            raise HTTPException(status_code=400, detail="No changes to commit")
+        # Get the status of the repository
+        status_output = repo.git.status(porcelain=True)
+        changes = [line.strip() for line in status_output.split('\n') if line.strip()]
         
-        # Analyze changes to generate commit message
-        changes = analyze_changes(repo, changed_files)
-        
-        # Generate commit message
-        if len(changes) == 1:
-            # Single file change - use its description
-            primary_change = changes[0].replace('- Update ', '')
-            message = f"feat: {primary_change}"
+        # Generate commit message based on changes
+        message = "feat: "
+        if changes:
+            # Try to generate a meaningful commit message from the first change
+            first_change = changes[0]
+            if first_change:
+                # Extract the filename and remove status markers
+                filename = first_change[3:].split('/')[-1]
+                message += f"Update {filename}"
+                if len(changes) > 1:
+                    message += f" and {len(changes) - 1} other files"
         else:
-            # Multiple files - create a summary
-            main_files = [os.path.basename(f) for f in changed_files[:3]]
-            if len(changed_files) > 3:
-                message = f"feat: update {', '.join(main_files)} and {len(changed_files) - 3} more files"
-            else:
-                message = f"feat: update {', '.join(main_files)}"
+            message += "No changes to commit"
         
-        return CommitPreview(
-            message=message,
-            changes=changes
-        )
+        return {
+            "message": message,
+            "changes": changes
+        }
     except Exception as e:
-        print(f"Error generating commit preview: {str(e)}")
+        print(f"Git error in get_commit_preview: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/git/commit/feature")
 async def create_feature_commit():
-    """Create a feature commit with the generated message."""
+    """Create a feature commit with the staged changes."""
     try:
         repo = get_repo()
-        preview = await preview_feature_commit()
         
-        # Ensure Git user is configured
-        git_user_name = os.getenv('GIT_USER_NAME')
-        git_user_email = os.getenv('GIT_USER_EMAIL')
+        # Get the status
+        status_output = repo.git.status(porcelain=True)
+        if not status_output.strip():
+            raise HTTPException(status_code=400, detail="No changes to commit")
         
-        if not git_user_name or not git_user_email:
-            raise HTTPException(
-                status_code=500,
-                detail="Git user not configured. Please set GIT_USER_NAME and GIT_USER_EMAIL environment variables."
-            )
-        
-        # Configure Git user locally for this repository
-        repo.config_writer().set_value("user", "name", git_user_name).release()
-        repo.config_writer().set_value("user", "email", git_user_email).release()
-        
-        # Stage all changes
+        # Add all changes
         repo.git.add('.')
         
-        # Create commit with full message
-        full_message = preview.message + "\n\n" + "\n".join(preview.changes)
-        commit = repo.index.commit(full_message)
+        # Generate commit message
+        preview = await get_commit_preview()
+        message = preview["message"]
         
-        return {
-            "status": "success",
-            "message": full_message,
-            "commit_hash": commit.hexsha
-        }
+        # Create commit
+        repo.index.commit(message)
+        
+        return {"message": "Commit created successfully"}
+    except GitCommandError as e:
+        print(f"Git command error in create_feature_commit: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        print(f"Error creating feature commit: {str(e)}")
+        print(f"Error in create_feature_commit: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # New Git operation endpoints
@@ -480,13 +493,51 @@ async def push_changes():
         if not repo.remotes:
             raise HTTPException(status_code=400, detail="No remote repository configured")
         
-        # Push to remote
-        repo.remotes.origin.push(branch.name)
+        # Get remote name (usually 'origin')
+        remote = repo.remotes[0]
         
-        return {"status": "success", "message": f"Successfully pushed to {branch.name}"}
+        try:
+            # Fetch first to check for updates
+            remote.fetch()
+            
+            # Get the tracking branch
+            tracking_branch = repo.active_branch.tracking_branch()
+            if not tracking_branch:
+                # If no tracking branch, try to set it up
+                remote_branch = f"origin/{branch.name}"
+                repo.git.branch(f"--set-upstream-to={remote_branch}", branch.name)
+            
+            # Push to remote
+            push_info = remote.push()[0]
+            if push_info.flags & push_info.ERROR:
+                raise GitCommandError("git push", f"Push failed: {push_info.summary}")
+            
+            return {
+                "status": "success",
+                "message": f"Successfully pushed to {branch.name}",
+                "remote": remote.name,
+                "branch": branch.name
+            }
+            
+        except GitCommandError as e:
+            if "non-fast-forward" in str(e):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Remote has new changes. Please pull first."
+                )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Push failed: {str(e)}"
+            )
+            
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error pushing changes: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to push changes: {str(e)}"
+        )
 
 @app.post("/api/git/pull")
 async def pull_changes():

@@ -19,6 +19,17 @@ interface CommitPreview {
   changes: string[]
 }
 
+interface CommitInfo {
+  message: string
+  timestamp: string
+  relative_time: string
+  author?: {
+    name: string
+    email: string
+  }
+  error?: string
+}
+
 export const GitWidget = () => {
   const { currentBranch, lastCommit, openPRs, isLoading, error, refetch } = useGitStatus()
   const [showCommitModal, setShowCommitModal] = useState(false)
@@ -89,15 +100,34 @@ export const GitWidget = () => {
 
       const response = await fetch(`${API_URL}/api/git/push`, {
         method: 'POST',
-        headers: { 'Accept': 'application/json' }
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        }
       })
 
       if (!response.ok) {
-        throw new Error('Failed to push changes')
+        const errorData = await response.json().catch(() => ({}))
+        if (response.status === 409) {
+          // Handle non-fast-forward error
+          const shouldPull = window.confirm(
+            'Remote has new changes. Would you like to pull these changes first?'
+          )
+          if (shouldPull) {
+            await handlePull()
+            // Retry push after successful pull
+            return handlePush()
+          }
+          throw new Error('Please pull changes first')
+        }
+        throw new Error(errorData.detail || 'Failed to push changes')
       }
 
+      const data = await response.json()
+      console.log('Push successful:', data.message)
       refetch()
     } catch (err) {
+      console.error('Push error:', err)
       setCommitError(err instanceof Error ? err.message : 'Failed to push changes')
     } finally {
       setIsCommitting(false)
@@ -373,17 +403,22 @@ export const GitWidget = () => {
             <CommitIcon className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm">Last Commit</span>
           </div>
-          <span className="text-sm font-medium">
-            {isLoading ? (
-              <span className="text-muted-foreground">Loading...</span>
-            ) : lastCommit.error ? (
-              <span className="text-destructive">{lastCommit.message}</span>
-            ) : (
-              lastCommit.timestamp 
-                ? formatDistanceToNow(new Date(lastCommit.timestamp), { addSuffix: true })
-                : '-'
+          <div className="text-right">
+            <span className="text-sm font-medium block">
+              {isLoading ? (
+                <span className="text-muted-foreground">Loading...</span>
+              ) : lastCommit.error ? (
+                <span className="text-destructive">{lastCommit.message}</span>
+              ) : (
+                lastCommit.relative_time || formatDistanceToNow(new Date(lastCommit.timestamp), { addSuffix: true })
+              )}
+            </span>
+            {!isLoading && !lastCommit.error && lastCommit.author && (
+              <span className="text-xs text-muted-foreground">
+                by {lastCommit.author.name}
+              </span>
             )}
-          </span>
+          </div>
         </div>
 
         <div className="flex items-center justify-between">

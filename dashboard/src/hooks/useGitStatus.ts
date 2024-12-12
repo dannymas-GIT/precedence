@@ -8,6 +8,11 @@ interface BranchResponse {
 interface CommitResponse {
   message: string
   timestamp: string
+  relative_time?: string
+  author?: {
+    name: string
+    email: string
+  }
   error?: string
 }
 
@@ -37,9 +42,27 @@ export const useGitStatus = (): GitStatus => {
       setStatus(prev => ({ ...prev, isLoading: true, error: null }))
 
       const [branchResponse, commitResponse, prResponse] = await Promise.all([
-        fetch(`${API_URL}/api/git/branch`),
-        fetch(`${API_URL}/api/git/commit`),
-        fetch(`${API_URL}/api/git/prs`)
+        fetch(`${API_URL}/api/git/branch`, {
+          headers: {
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        }),
+        fetch(`${API_URL}/api/git/commit`, {
+          headers: {
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        }),
+        fetch(`${API_URL}/api/git/prs`, {
+          headers: {
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        })
       ])
 
       if (!branchResponse.ok) throw new Error('Failed to fetch branch')
@@ -70,10 +93,29 @@ export const useGitStatus = (): GitStatus => {
     }
   }, [API_URL])
 
+  // Initial fetch
   useEffect(() => {
     fetchGitStatus()
-    const interval = setInterval(fetchGitStatus, 30000)
+  }, [fetchGitStatus])
+
+  // Set up polling for updates
+  useEffect(() => {
+    const interval = setInterval(fetchGitStatus, 5000) // Poll every 5 seconds
     return () => clearInterval(interval)
+  }, [fetchGitStatus])
+
+  // Set up commit event listener
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchGitStatus()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [fetchGitStatus])
 
   return {
