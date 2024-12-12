@@ -9,6 +9,13 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
+    proxy: {
+      '/dashboard-api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/dashboard-api/, '')
+      }
+    },
     hmr: {
       path: '/ws',
       port: 5173,

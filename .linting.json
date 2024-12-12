@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "severity": 0.9,
+  "tools": {
+    "eslint": true,
+    "typescript": true,
+    "pylint": true
+  }
+}

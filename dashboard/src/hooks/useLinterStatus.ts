@@ -29,22 +29,30 @@ export const useLinterStatus = (): LinterStatus => {
 
       const response = await fetch(`${API_URL}/api/linter/status`, {
         headers: {
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
         }
       })
 
       if (!response.ok) {
-        throw new Error('Failed to fetch linter status')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || `Failed to fetch linter status: ${response.status}`)
       }
 
       const data = await response.json()
-      if (data.error) {
-        throw new Error(data.error)
+      
+      // Validate response data structure
+      if (!Array.isArray(data.tools)) {
+        throw new Error('Invalid linter status response format')
       }
 
       setStatus(prev => ({
         ...prev,
-        issues: data.tools || [],
+        issues: data.tools.map((tool: any) => ({
+          tool: String(tool.tool || ''),
+          errors: Number(tool.errors || 0),
+          warnings: Number(tool.warnings || 0)
+        })),
         isLoading: false,
         error: null
       }))
