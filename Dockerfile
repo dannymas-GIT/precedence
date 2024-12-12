@@ -54,6 +54,12 @@ COPY --from=frontend-builder /app/dashboard/dist ./dashboard/dist
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
+# Set permissions for Git operations
+RUN mkdir -p /workspace && chown -R root:root /workspace
+
 EXPOSE 80 8000 3001
 
-CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+# Configure Git at runtime using environment variables
+CMD git config --global user.name "${GIT_USER_NAME}" && \
+    git config --global user.email "${GIT_USER_EMAIL}" && \
+    /usr/bin/supervisord -n -c /etc/supervisor/conf.d/supervisord.conf 
